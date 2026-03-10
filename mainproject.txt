@@ -1,0 +1,70 @@
+pipeline {
+    agent any
+    environment {
+         scannerHome = tool 'mysonar';
+         CLOUDINARY_CLOUD_NAME = credentials('CLOUDINARY_CLOUD_NAME')
+         CLOUDINARY_KEY = credentials('CLOUDINARY_KEY')
+         CLOUDINARY_SECRET = credentials('CLOUDINARY_SECRET')
+         MAPBOX_TOKEN = credentials('MAPBOX_TOKEN')
+         DB_URL = credentials('DB_URL')
+    }
+    stages {
+        stage('Code') {
+            steps {
+                git branch: 'main', url: 'https://github.com/Pavankumar49280/3-Tier-Full-Stack-yelp-camp.git'
+            }
+        }
+        stage("CQA"){
+            steps{
+            withSonarQubeEnv('mysonar'){
+            sh ''' ${scannerHome}/bin/sonar-scanner -Dsonar.projectName=zomato \
+                        -Dsonar.projectKey=zomato'''
+            }
+        }
+    }
+        stage("GATES"){
+            steps {
+                waitForQualityGate abortPipeline: false, credentialsId: 'sonarid'
+            }
+        }
+        stage("OWASP") {
+            steps {
+            dependencyCheck additionalArguments: '--scan ./ --disableYarnAudit --disableNodeAudit', nvdCredentialsId: 'nvdapi', odcInstallation: 'dependency'
+            dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+        }
+     }
+        stage("Image"){
+            steps {
+                sh "docker build -t pavan . "
+            }
+        }
+        stage("Scan"){
+            steps {
+            sh "trivy image pavan"
+        }
+        }
+        stage("Tag & Push") {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'docker_cred') {
+                     sh "docker tag pavan kumar49/mainproject:v1"
+                     sh "docker push kumar49/mainproject:v1 "
+                    }
+                }
+            }
+        }
+        stage("Deploy"){
+            steps{
+               sh """
+                    docker run -itd --name cont1 -p 1234:3000 \
+                    -e CLOUDINARY_CLOUD_NAME=${CLOUDINARY_CLOUD_NAME} \
+                    -e CLOUDINARY_KEY=${CLOUDINARY_KEY} \
+                    -e CLOUDINARY_SECRET=${CLOUDINARY_SECRET} \
+                    -e MAPBOX_TOKEN=${MAPBOX_TOKEN} \
+                    -e DB_URL=${DB_URL} \
+                    kumar49/mainproject:v1
+                """
+            }
+        }
+}
+}
